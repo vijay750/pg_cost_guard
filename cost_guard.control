@@ -1,0 +1,5 @@
+# cost_guard extension
+comment = 'Query cost threshold guard'
+default_version = '1.0'
+module_pathname = '$libdir/cost_guard'
+relocatable = true

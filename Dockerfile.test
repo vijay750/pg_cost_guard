@@ -19,6 +19,7 @@ COPY cost_guard.control .
 COPY cost_guard--1.0.sql .
 COPY Makefile .
 COPY run_tests.sql .
+COPY run_selective_tests.sql .
 
 # Set environment variables for building
 ENV USE_PGXS=1

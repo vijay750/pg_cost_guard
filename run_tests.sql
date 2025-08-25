@@ -96,6 +96,12 @@ END $$;
 -- Test 5: High Cost Query (Should Fail)
 \echo '6. Testing high cost query (should fail)...'
 DO $$
+DECLARE
+    error_message TEXT;
+    estimated_cost NUMERIC;
+    threshold_value NUMERIC := 1000;
+    cost_match TEXT[];
+    threshold_match TEXT[];
 BEGIN
     SET cost_guard.threshold = 1000;
     -- This should fail
@@ -104,7 +110,24 @@ BEGIN
 EXCEPTION
     WHEN OTHERS THEN
         IF SQLSTATE = '54001' THEN  -- ERRCODE_STATEMENT_TOO_COMPLEX
-            RAISE NOTICE 'PASS: Expensive query correctly blocked - %', SQLERRM;
+            error_message := SQLERRM;
+            
+            -- Parse estimated cost from error message: "query cost X.XX exceeds threshold Y.YY"
+            cost_match := regexp_match(error_message, 'query cost ([0-9]+\.?[0-9]*)');
+            threshold_match := regexp_match(error_message, 'threshold ([0-9]+\.?[0-9]*)');
+            
+            IF cost_match IS NOT NULL AND threshold_match IS NOT NULL THEN
+                estimated_cost := cost_match[1]::NUMERIC;
+                threshold_value := threshold_match[1]::NUMERIC;
+                
+                IF estimated_cost > threshold_value THEN
+                    RAISE NOTICE 'PASS: Expensive query correctly blocked - estimated cost %.2f > threshold %.2f', estimated_cost, threshold_value;
+                ELSE
+                    RAISE NOTICE 'FAIL: Error message parsing issue - estimated cost %.2f should be > threshold %.2f', estimated_cost, threshold_value;
+                END IF;
+            ELSE
+                RAISE NOTICE 'PASS: Expensive query correctly blocked (could not parse costs) - %', error_message;
+            END IF;
         ELSE
             RAISE NOTICE 'UNCERTAIN: Unexpected error (may still be correct) - %', SQLERRM;
         END IF;

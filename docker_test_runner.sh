@@ -1,7 +1,17 @@
 #!/bin/bash
 set -e
 
+# Parse command line arguments for test selection
+TEST_FILTER=""
+if [ "$#" -gt 0 ]; then
+    TEST_FILTER="$1"
+fi
+
 echo "=== PostgreSQL Cost Guard Extension Docker Test Runner ==="
+echo "Running as user: $(whoami)"
+if [ -n "$TEST_FILTER" ]; then
+    echo "Test filter: $TEST_FILTER"
+fi
 echo "Starting PostgreSQL server..."
 
 # Initialize PostgreSQL data directory if it doesn't exist
@@ -45,11 +55,20 @@ fi
 
 # Run the test suite
 echo "Running test suite..."
-if psql -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /extension/run_tests.sql; then
-    TEST_EXIT_CODE=0
+if [ -n "$TEST_FILTER" ]; then
+    echo "Running specific tests: $TEST_FILTER"
+    # Create a temporary SQL file with selected tests
+    psql -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\set test_filter '$TEST_FILTER'" -f /extension/run_selective_tests.sql
+    TEST_EXIT_CODE=$?
+else
+    echo "Running all tests"
+    psql -h localhost -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f /extension/run_tests.sql
+    TEST_EXIT_CODE=$?
+fi
+
+if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo "Test suite completed successfully"
 else
-    TEST_EXIT_CODE=1
     echo "Test suite failed"
 fi
 

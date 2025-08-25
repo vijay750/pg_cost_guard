@@ -17,10 +17,75 @@ build:
 # Run tests using Docker Compose
 .PHONY: test
 test: build
-	@echo "Running tests in Docker container..."
-	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit
-	@echo "Cleaning up containers..."
-	docker-compose -f docker-compose.test.yml down -v
+	@echo "Starting PostgreSQL Cost Guard Extension test suite..."
+	@echo "This will build, install, and test the extension in a clean PostgreSQL container."
+	@echo ""
+	@if docker run --rm --name $(CONTAINER_NAME) $(IMAGE_NAME); then \
+		echo ""; \
+		echo "✅ ALL TESTS COMPLETED SUCCESSFULLY!"; \
+		echo "The cost_guard extension is working correctly."; \
+	else \
+		echo ""; \
+		echo "❌ TESTS FAILED!"; \
+		echo "Check the output above for error details."; \
+		echo "Run 'make debug' for interactive debugging."; \
+		exit 1; \
+	fi
+
+# Run specific tests by name (e.g., make test-only TESTS="test1,test3,test5")
+test-only: build
+	@echo "Running specific tests: $(TESTS)"
+	@if [ -z "$(TESTS)" ]; then \
+		echo "❌ ERROR: Please specify TESTS parameter"; \
+		echo "Example: make test-only TESTS=\"test1,test3,test5\""; \
+		exit 1; \
+	fi
+	@if docker run --rm --name $(CONTAINER_NAME) $(IMAGE_NAME) "$(TESTS)"; then \
+		echo ""; \
+		echo "✅ SELECTED TESTS COMPLETED SUCCESSFULLY!"; \
+	else \
+		echo ""; \
+		echo "❌ SELECTED TESTS FAILED!"; \
+		echo "Run 'make debug' for interactive debugging."; \
+		exit 1; \
+	fi
+
+# Quick test shortcuts for individual tests
+test1: build
+	@$(MAKE) test-only TESTS="test1"
+
+test2: build
+	@$(MAKE) test-only TESTS="test2"
+
+test3: build
+	@$(MAKE) test-only TESTS="test3"
+
+test4: build
+	@$(MAKE) test-only TESTS="test4"
+
+test5: build
+	@$(MAKE) test-only TESTS="test5"
+
+test6: build
+	@$(MAKE) test-only TESTS="test6"
+
+test7: build
+	@$(MAKE) test-only TESTS="test7"
+
+test8: build
+	@$(MAKE) test-only TESTS="test8"
+
+test9: build
+	@$(MAKE) test-only TESTS="test9"
+
+test10: build
+	@$(MAKE) test-only TESTS="test10"
+
+test11: build
+	@$(MAKE) test-only TESTS="test11"
+
+test12: build
+	@$(MAKE) test-only TESTS="test12"
 
 # Run tests using plain Docker (alternative method)
 .PHONY: test-docker
@@ -59,12 +124,35 @@ logs:
 # Help target
 .PHONY: help
 help:
+	@echo "PostgreSQL Cost Guard Extension - Docker Test Suite"
+	@echo ""
 	@echo "Available targets:"
-	@echo "  test         - Build and run tests using Docker Compose (default)"
-	@echo "  test-docker  - Build and run tests using plain Docker"
-	@echo "  test-verbose - Run tests with verbose output saved to test_output.log"
-	@echo "  build        - Build the Docker test image"
-	@echo "  clean        - Clean up Docker resources"
-	@echo "  debug        - Start interactive shell in test container"
-	@echo "  logs         - Show logs from last test run"
-	@echo "  help         - Show this help message"
+	@echo "  build      - Build the Docker test image"
+	@echo "  test       - Run the complete test suite (all 12 tests)"
+	@echo "  test-only  - Run specific tests (requires TESTS parameter)"
+	@echo "  test1-12   - Run individual tests by number"
+	@echo "  clean      - Clean up Docker containers and images"
+	@echo "  debug      - Run container interactively for debugging"
+	@echo "  logs       - Show logs from the last test run"
+	@echo "  shell      - Open a shell in the test container"
+	@echo "  help       - Show this help message"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make test                              # Run all tests"
+	@echo "  make test5                             # Run only test 5 (high cost query)"
+	@echo "  make test-only TESTS=\"test1,test3,test5\" # Run specific tests"
+	@echo "  make test-only TESTS=\"test1-5\"          # Run tests 1 through 5"
+	@echo ""
+	@echo "Test descriptions:"
+	@echo "  test1  - Extension installation"
+	@echo "  test2  - Default configuration"
+	@echo "  test3  - Configuration changes"
+	@echo "  test4  - Low cost query (should pass)"
+	@echo "  test5  - High cost query (should fail) - Enhanced"
+	@echo "  test6  - Extension disabled"
+	@echo "  test7  - Utility statements"
+	@echo "  test8  - Query cost analysis"
+	@echo "  test9  - Warning system"
+	@echo "  test10 - Boundary testing"
+	@echo "  test11 - Extension uninstall"
+	@echo "  test12 - Extension reinstall"

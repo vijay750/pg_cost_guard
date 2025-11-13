@@ -18,7 +18,7 @@ The Cost Guard Extension is a PostgreSQL extension that intercepts query plannin
 
 ## Installation
 
-### Prerequisites
+### Prerequisites for Building
 
 - PostgreSQL 11 or later
 - PostgreSQL development headers (`postgresql-server-dev` package)

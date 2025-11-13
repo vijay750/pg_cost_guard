@@ -1,14 +1,23 @@
 # Dockerfile for testing PostgreSQL cost_guard extension
 FROM postgres:15
 
-# Install build dependencies
+# Install build dependencies and SSH server
 RUN apt-get update && apt-get install -y \
     build-essential \
     postgresql-server-dev-15 \
     make \
     gcc \
     libc6-dev \
+    openssh-server \
+    sudo \
+    vim \
     && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH
+RUN mkdir -p /var/run/sshd && \
+    echo 'root:testpass' | chpasswd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
 # Set working directory
 WORKDIR /extension
@@ -33,9 +42,11 @@ RUN set -e && \
     make install && \
     echo "Extension build and install completed successfully"
 
-# Copy test script and make it executable
+# Copy test scripts and make them executable
 COPY docker_test_runner.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker_test_runner.sh
+COPY run_tests_in_container.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker_test_runner.sh && \
+    chmod +x /usr/local/bin/run_tests_in_container.sh
 
 # Set environment variables for PostgreSQL
 ENV POSTGRES_DB=postgres
@@ -48,11 +59,20 @@ RUN mkdir -p /var/lib/postgresql/data && \
     chown -R postgres:postgres /var/lib/postgresql && \
     chmod 700 /var/lib/postgresql/data
 
-# Expose PostgreSQL port
-EXPOSE 5432
+# Allow postgres user to use sudo without password (for SSH service)
+RUN echo 'postgres ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 
-# Switch to postgres user for running PostgreSQL
-USER postgres
+# Create initialization script for PostgreSQL (runs once on first start)
+COPY init-extension.sh /docker-entrypoint-initdb.d/
+RUN chmod +x /docker-entrypoint-initdb.d/init-extension.sh
 
-# Use custom entrypoint that runs tests
-ENTRYPOINT ["/usr/local/bin/docker_test_runner.sh"]
+# Create wrapper entrypoint that starts SSH then calls postgres entrypoint
+COPY docker-entrypoint-wrapper.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint-wrapper.sh
+
+# Expose PostgreSQL and SSH ports
+EXPOSE 5432 22
+
+# Use wrapper entrypoint that starts SSH and delegates to postgres entrypoint
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-wrapper.sh"]
+CMD ["postgres"]

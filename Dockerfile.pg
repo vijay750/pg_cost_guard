@@ -1,0 +1,54 @@
+# Dockerfile for testing PostgreSQL cost_guard extension
+FROM postgres:15
+
+# Install PG, build dependencies, ssh
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    postgresql-server-dev-15 \
+    make \
+    gcc \
+    libc6-dev \
+	openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+	&& mkdir /var/run/sshd
+
+# Set working directory
+WORKDIR /extension
+
+# Copy extension source files
+COPY cost_guard.c .
+COPY cost_guard.control .
+COPY cost_guard--1.0.sql .
+COPY Makefile .
+COPY run_tests.sql .
+COPY run_selective_tests.sql .
+
+# Set environment variables for building
+ENV USE_PGXS=1
+
+# Build and install the extension with better error handling
+RUN set -e && \
+    echo "Building extension..." && \
+    make clean || true && \
+    make && \
+    echo "Installing extension..." && \
+    make install && \
+    echo "Extension build and install completed successfully"
+
+# Set environment variables for PostgreSQL
+ENV POSTGRES_DB=postgres
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=testpass
+ENV PGDATA=/var/lib/postgresql/data
+
+# Create postgres user directories with proper ownership
+RUN mkdir -p /var/lib/postgresql/data && \
+    chown -R postgres:postgres /var/lib/postgresql && \
+    chmod 700 /var/lib/postgresql/data
+
+# Expose PostgreSQL port
+EXPOSE 5432
+
+# Switch to postgres user for running PostgreSQL
+USER postgres
+

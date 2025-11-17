@@ -3,68 +3,189 @@
 # Docker image and container names
 IMAGE_NAME = cost_guard_test
 CONTAINER_NAME = cost_guard_test_container
+SSH_PORT = 2222
 
 # Default target
-.PHONY: all
-all: test
+all: help
 
 # Build the Docker test image
-.PHONY: build
 build:
 	@echo "Building Docker test image..."
 	docker build -f Dockerfile.test -t $(IMAGE_NAME) .
 
-# Run tests using Docker Compose
-.PHONY: test
-test: build
-	@echo "Running tests in Docker container..."
-	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit
-	@echo "Cleaning up containers..."
-	docker-compose -f docker-compose.test.yml down -v
+# Start the container with PostgreSQL and SSH server running
+start: build
+	@echo "Starting PostgreSQL Cost Guard Extension container..."
+	@if docker ps -a --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "Container $(CONTAINER_NAME) already exists."; \
+		if docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+			echo "Container is already running."; \
+		else \
+			echo "Starting existing container..."; \
+			docker start $(CONTAINER_NAME); \
+		fi \
+	else \
+		echo "Creating and starting new container..."; \
+		docker run -d \
+			--name $(CONTAINER_NAME) \
+			-p $(SSH_PORT):22 \
+			-p 5432:5432 \
+			$(IMAGE_NAME); \
+	fi
+	@echo ""
+	@echo "Waiting for container to be ready..."
+	@sleep 5
+	@echo ""
+	@echo "✅ Container is running!"
+	@echo ""
+	@echo "PostgreSQL: localhost:5432 (user: postgres, password: testpass)"
+	@echo "SSH access: ssh -p $(SSH_PORT) postgres@localhost (password: testpass)"
+	@echo "            ssh -p $(SSH_PORT) root@localhost (password: testpass)"
+	@echo ""
+	@echo "Run 'make run-tests' to execute the test suite"
+	@echo "Run 'make ssh' to SSH into the container"
+	@echo "Run 'make stop' to stop the container"
 
-# Run tests using plain Docker (alternative method)
-.PHONY: test-docker
-test-docker: build
-	@echo "Running tests in Docker container..."
-	docker run --rm --name $(CONTAINER_NAME) $(IMAGE_NAME)
+# Run tests in the running container
+run-tests: start
+	@echo "Running tests in container $(CONTAINER_NAME)..."
+	@if ! docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) is not running!"; \
+		echo "Run 'make start' first."; \
+		exit 1; \
+	fi
+	@echo ""
+	@docker exec -it $(CONTAINER_NAME) /usr/local/bin/run_tests_in_container.sh
+
+# SSH into the running container
+ssh: start
+	@if ! docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) is not running!"; \
+		echo "Run 'make start' first."; \
+		exit 1; \
+	fi
+	@echo "Connecting to container via SSH..."
+	@echo "Password: testpass"
+	@ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_PORT) postgres@localhost
+
+# SSH as root
+ssh-root: start
+	@if ! docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) is not running!"; \
+		echo "Run 'make start' first."; \
+		exit 1; \
+	fi
+	@echo "Connecting to container as root via SSH..."
+	@echo "Password: testpass"
+	@ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $(SSH_PORT) root@localhost
+
+# Execute shell in container (alternative to SSH)
+shell: start
+	@if ! docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) is not running!"; \
+		echo "Run 'make start' first."; \
+		exit 1; \
+	fi
+	@echo "Opening shell in container..."
+	@docker exec -it $(CONTAINER_NAME) /bin/bash
+
+# Stop the container
+stop:
+	@echo "Stopping container $(CONTAINER_NAME)..."
+	@docker stop $(CONTAINER_NAME) 2>/dev/null || echo "Container not running"
+
+# Restart the container
+restart: stop start
+
+# Complete test workflow: start container, run tests, show results
+test: start
+	@echo ""
+	@echo "Running complete test workflow..."
+	@sleep 2
+	@$(MAKE) run-tests
+
+# View container logs
+logs:
+	@if ! docker ps -a --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) does not exist!"; \
+		exit 1; \
+	fi
+	@echo "Showing container logs..."
+	@docker logs $(CONTAINER_NAME)
+
+# View PostgreSQL logs
+pg-logs:
+	@if ! docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		echo "❌ Container $(CONTAINER_NAME) is not running!"; \
+		exit 1; \
+	fi
+	@echo "Showing PostgreSQL logs..."
+	@docker exec $(CONTAINER_NAME) tail -n 100 /var/lib/postgresql/data/postgresql.log
+
+# Check container status
+status:
+	@echo "Container status:"
+	@if docker ps -a --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+		if docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+			echo "✅ Container $(CONTAINER_NAME) is RUNNING"; \
+			docker ps --filter "name=$(CONTAINER_NAME)" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"; \
+		else \
+			echo "⚠️  Container $(CONTAINER_NAME) exists but is STOPPED"; \
+			echo "Run 'make start' to start it"; \
+		fi \
+	else \
+		echo "❌ Container $(CONTAINER_NAME) does not exist"; \
+		echo "Run 'make start' to create and start it"; \
+	fi
 
 # Clean up Docker resources
-.PHONY: clean
 clean:
 	@echo "Cleaning up Docker resources..."
-	-docker-compose -f docker-compose.test.yml down -v
-	-docker container rm -f $(CONTAINER_NAME) 2>/dev/null || true
+	-docker stop $(CONTAINER_NAME) 2>/dev/null || true
+	-docker rm -f $(CONTAINER_NAME) 2>/dev/null || true
 	-docker image rm -f $(IMAGE_NAME) 2>/dev/null || true
-	-docker volume prune -f
 	@echo "Cleanup complete."
 
-# Build and run tests with verbose output
-.PHONY: test-verbose
-test-verbose: build
-	@echo "Running tests with verbose output..."
-	docker run --rm --name $(CONTAINER_NAME) $(IMAGE_NAME) 2>&1 | tee test_output.log
+# Complete cleanup including volumes
+clean-all: clean
+	@echo "Removing all unused Docker volumes..."
+	-docker volume prune -f
+	@echo "Complete cleanup done."
 
-# Interactive shell in test container for debugging
-.PHONY: debug
-debug: build
-	@echo "Starting interactive shell in test container..."
-	docker run --rm -it --name $(CONTAINER_NAME) --entrypoint /bin/bash $(IMAGE_NAME)
-
-# Show Docker logs from last test run
-.PHONY: logs
-logs:
-	@echo "Showing logs from last test run..."
-	docker-compose -f docker-compose.test.yml logs
+# Rebuild everything from scratch
+rebuild: clean build
 
 # Help target
-.PHONY: help
 help:
-	@echo "Available targets:"
-	@echo "  test         - Build and run tests using Docker Compose (default)"
-	@echo "  test-docker  - Build and run tests using plain Docker"
-	@echo "  test-verbose - Run tests with verbose output saved to test_output.log"
-	@echo "  build        - Build the Docker test image"
-	@echo "  clean        - Clean up Docker resources"
-	@echo "  debug        - Start interactive shell in test container"
-	@echo "  logs         - Show logs from last test run"
-	@echo "  help         - Show this help message"
+	@echo "PostgreSQL Cost Guard Extension - Docker Test Suite"
+	@echo ""
+	@echo "=== Main Workflow ==="
+	@echo "  start       - Build and start the container (PostgreSQL + SSH)"
+	@echo "  run-tests   - Run tests in the running container"
+	@echo "  test        - Complete workflow: start + run tests"
+	@echo "  stop        - Stop the running container"
+	@echo "  restart     - Restart the container"
+	@echo ""
+	@echo "=== Access & Debugging ==="
+	@echo "  ssh         - SSH into container as postgres user"
+	@echo "  ssh-root    - SSH into container as root"
+	@echo "  shell       - Open bash shell in container (docker exec)"
+	@echo "  status      - Check container status"
+	@echo "  logs        - View container logs"
+	@echo "  pg-logs     - View PostgreSQL logs"
+	@echo ""
+	@echo "=== Build & Cleanup ==="
+	@echo "  build       - Build the Docker image"
+	@echo "  rebuild     - Clean and rebuild from scratch"
+	@echo "  clean       - Remove container and image"
+	@echo "  clean-all   - Remove container, image, and volumes"
+	@echo ""
+	@echo "=== Examples ==="
+	@echo "  make start              # Start container with PostgreSQL + SSH"
+	@echo "  make run-tests          # Run test suite in running container"
+	@echo "  make ssh                # SSH into container (password: testpass)"
+	@echo "  make test               # Full workflow: start + test"
+	@echo ""
+	@echo "=== Connection Info ==="
+	@echo "  PostgreSQL: localhost:5432 (user: postgres, password: testpass)"
+	@echo "  SSH:        ssh -p 2222 postgres@localhost (password: testpass)"

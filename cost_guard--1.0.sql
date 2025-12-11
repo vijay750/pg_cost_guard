@@ -5,3 +5,4 @@
 -- The configuration is done via GUC parameters:
 -- cost_guard.threshold - maximum allowed query cost (default: 1000000.0)
 -- cost_guard.enabled - enable/disable the cost guard (default: true)
+-- cost_guard.max_plan_rows - maximum allowed estimated rows in query plan (default: 0, meaning no limit)

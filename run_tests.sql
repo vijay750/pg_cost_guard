@@ -51,14 +51,16 @@ DO $$
 DECLARE
     threshold_val TEXT;
     enabled_val TEXT;
+    max_rows_val TEXT;
 BEGIN
     SELECT setting INTO threshold_val FROM pg_settings WHERE name = 'cost_guard.threshold';
     SELECT setting INTO enabled_val FROM pg_settings WHERE name = 'cost_guard.enabled';
+    SELECT setting INTO max_rows_val FROM pg_settings WHERE name = 'cost_guard.max_plan_rows';
     
-    IF threshold_val = '1e+06' AND enabled_val = 'on' THEN
-        RAISE NOTICE 'PASS: Default configuration correct (threshold: %, enabled: %)', threshold_val, enabled_val;
+    IF threshold_val = '1e+06' AND enabled_val = 'on' AND max_rows_val = '0' THEN
+        RAISE NOTICE 'PASS: Default configuration correct (threshold: %, enabled: %, max_plan_rows: %)', threshold_val, enabled_val, max_rows_val;
     ELSE
-        RAISE NOTICE 'FAIL: Default configuration incorrect (threshold: %, enabled: %)', threshold_val, enabled_val;
+        RAISE NOTICE 'FAIL: Default configuration incorrect (threshold: %, enabled: %, max_plan_rows: %)', threshold_val, enabled_val, max_rows_val;
     END IF;
 EXCEPTION
     WHEN OTHERS THEN
@@ -73,6 +75,8 @@ BEGIN
     SET cost_guard.threshold = 500000;
     SET cost_guard.enabled = false;
     SET cost_guard.enabled = true;
+    SET cost_guard.max_plan_rows = 10000;
+    SET cost_guard.max_plan_rows = 0;
     RAISE NOTICE 'PASS: Configuration changes successful';
 EXCEPTION
     WHEN OTHERS THEN
@@ -222,8 +226,224 @@ EXCEPTION
 END $$;
 \echo ''
 
--- Test 11: Extension Uninstall
-\echo '12. Testing extension uninstall...'
+-- Test 11: Max Plan Rows - Low Row Query (Should Pass)
+\echo '12. Testing max_plan_rows with low row query (should pass)...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 1000000;
+    SET cost_guard.max_plan_rows = 50000;
+    -- Query that should have low row estimate
+    PERFORM * FROM small_table WHERE id < 50;
+    RAISE NOTICE 'PASS: Low row query executed successfully';
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'FAIL: Low row query failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 12: Max Plan Rows - High Row Query (Should Fail)
+\echo '13. Testing max_plan_rows with high row query (should fail)...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;  -- Set high cost threshold
+    SET cost_guard.max_plan_rows = 5000;  -- Set low row threshold
+    BEGIN
+        -- Cross join should produce high row estimate
+        PERFORM * FROM medium_table m1, medium_table m2 WHERE m1.id < 100 AND m2.id < 100;
+        RAISE NOTICE 'FAIL: High row query should have been blocked';
+    EXCEPTION
+        WHEN SQLSTATE '54001' THEN  -- ERRCODE_STATEMENT_TOO_COMPLEX
+            RAISE NOTICE 'PASS: High row query correctly blocked by max_plan_rows';
+        WHEN OTHERS THEN
+            RAISE NOTICE 'FAIL: High row query failed with unexpected error - %', SQLERRM;
+    END;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'FAIL: Max plan rows test failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 13: Max Plan Rows Disabled (Should Pass)
+\echo '14. Testing query with max_plan_rows disabled (should pass)...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 0;  -- Disable row limit
+    -- Cross join with high row estimate should pass when disabled
+    PERFORM * FROM medium_table m1, medium_table m2 WHERE m1.id < 50 AND m2.id < 50;
+    RAISE NOTICE 'PASS: Query executed with max_plan_rows disabled';
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'FAIL: Query failed with max_plan_rows disabled - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 14: Both Cost and Row Limits
+\echo '15. Testing both cost and row limits together...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 1000;
+    SET cost_guard.max_plan_rows = 5000;
+    BEGIN
+        -- This query should be blocked by cost threshold
+        PERFORM * FROM large_table WHERE value > 5000;
+        RAISE NOTICE 'FAIL: Query should have been blocked by cost threshold';
+    EXCEPTION
+        WHEN SQLSTATE '54001' THEN
+            RAISE NOTICE 'PASS: Query blocked by either cost or row threshold';
+    END;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'FAIL: Combined threshold test failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 15: Max Plan Rows Warning System
+\echo '16. Testing max_plan_rows warning system...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 20000;
+    -- Query with row estimate around 80% of threshold (should warn but not block)
+    PERFORM * FROM medium_table m1, medium_table m2 WHERE m1.id < 50 AND m2.id < 50;
+    RAISE NOTICE 'PASS: Warning system test completed (check logs for warnings)';
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'FAIL: Warning system test failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 16: Multi-Step Plan - Aggregate Query
+\echo '17. Testing multi-step plan with aggregates...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 50000;
+    SET client_min_messages = DEBUG1;  -- Enable DEBUG logging to see plan traversal
+    
+    -- Aggregate query with GROUP BY creates multi-step plan (Aggregate -> Sort -> Seq Scan)
+    PERFORM value, COUNT(*) 
+    FROM medium_table 
+    GROUP BY value 
+    HAVING COUNT(*) > 1;
+    
+    SET client_min_messages = NOTICE;  -- Reset logging
+    RAISE NOTICE 'PASS: Aggregate query with multi-step plan executed successfully';
+EXCEPTION
+    WHEN OTHERS THEN
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Aggregate query failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 17: Multi-Step Plan - Join Query
+\echo '18. Testing multi-step plan with joins...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 200000;
+    SET client_min_messages = DEBUG1;
+    
+    -- Join creates multi-step plan (Hash Join -> Seq Scan + Hash -> Seq Scan)
+    PERFORM s.id, m.value
+    FROM small_table s
+    INNER JOIN medium_table m ON s.id = m.id
+    WHERE s.id < 50;
+    
+    SET client_min_messages = NOTICE;
+    RAISE NOTICE 'PASS: Join query with multi-step plan executed successfully';
+EXCEPTION
+    WHEN OTHERS THEN
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Join query failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 18: Multi-Step Plan - Nested Subquery
+\echo '19. Testing multi-step plan with subquery...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 100000;
+    SET client_min_messages = DEBUG1;
+    
+    -- Subquery creates nested plan tree
+    PERFORM * FROM (
+        SELECT m1.id, m1.value, COUNT(*) as cnt
+        FROM medium_table m1
+        WHERE m1.value > 5000
+        GROUP BY m1.id, m1.value
+    ) subq
+    WHERE subq.cnt > 0;
+    
+    SET client_min_messages = NOTICE;
+    RAISE NOTICE 'PASS: Subquery with multi-step plan executed successfully';
+EXCEPTION
+    WHEN OTHERS THEN
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Subquery failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 19: Multi-Step Plan - Complex Join with Aggregates
+\echo '20. Testing complex multi-step plan (join + aggregate)...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 150000;
+    SET client_min_messages = DEBUG1;
+    
+    -- Complex query: join + aggregate creates deep plan tree
+    PERFORM m.value, COUNT(DISTINCT s.id) as unique_ids
+    FROM medium_table m
+    LEFT JOIN small_table s ON m.id = s.id
+    WHERE m.value < 100000
+    GROUP BY m.value
+    HAVING COUNT(DISTINCT s.id) >= 0;
+    
+    SET client_min_messages = NOTICE;
+    RAISE NOTICE 'PASS: Complex join+aggregate query executed successfully';
+EXCEPTION
+    WHEN OTHERS THEN
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Complex query failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 20: Multi-Step Plan Blocked by Row Limit
+\echo '21. Testing multi-step plan blocked by max_plan_rows...'
+DO $$
+BEGIN
+    SET cost_guard.threshold = 10000000;
+    SET cost_guard.max_plan_rows = 1000;  -- Low threshold
+    SET client_min_messages = DEBUG1;
+    
+    BEGIN
+        -- This join should have intermediate steps exceeding row limit
+        PERFORM *
+        FROM medium_table m1
+        CROSS JOIN medium_table m2
+        WHERE m1.id < 100 AND m2.id < 100;
+        
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Query should have been blocked by max_plan_rows';
+    EXCEPTION
+        WHEN SQLSTATE '54001' THEN
+            SET client_min_messages = NOTICE;
+            RAISE NOTICE 'PASS: Multi-step query correctly blocked by max_plan_rows';
+        WHEN OTHERS THEN
+            SET client_min_messages = NOTICE;
+            RAISE NOTICE 'FAIL: Unexpected error - %', SQLERRM;
+    END;
+EXCEPTION
+    WHEN OTHERS THEN
+        SET client_min_messages = NOTICE;
+        RAISE NOTICE 'FAIL: Test setup failed - %', SQLERRM;
+END $$;
+\echo ''
+
+-- Test 21: Extension Uninstall
+\echo '22. Testing extension uninstall...'
 DO $$
 BEGIN
     DROP EXTENSION cost_guard;
@@ -238,8 +458,8 @@ EXCEPTION
 END $$;
 \echo ''
 
--- Test 12: Extension Reinstall
-\echo '13. Testing extension reinstall...'
+-- Test 22: Extension Reinstall
+\echo '23. Testing extension reinstall...'
 DO $$
 BEGIN
     CREATE EXTENSION cost_guard;

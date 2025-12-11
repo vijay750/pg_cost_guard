@@ -8,13 +8,18 @@ SSH_PORT = 2222
 # Default target
 all: help
 
-# Build the Docker test image
-build:
+# Build the Docker test image (stamp file target)
+.build: Dockerfile.test cost_guard.c cost_guard.control cost_guard--1.0.sql Makefile run_tests.sql run_selective_tests.sql docker_test_runner.sh run_tests_in_container.sh init-extension.sh docker-entrypoint-wrapper.sh
 	@echo "Building Docker test image..."
 	docker build -f Dockerfile.test -t $(IMAGE_NAME) .
+	@touch .build
+
+# Convenience target for build
+build: .build
 
 # Start the container with PostgreSQL and SSH server running
-start: build
+.PHONY: start
+start: .build
 	@echo "Starting PostgreSQL Cost Guard Extension container..."
 	@if docker ps -a --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
 		echo "Container $(CONTAINER_NAME) already exists."; \
@@ -34,9 +39,26 @@ start: build
 	fi
 	@echo ""
 	@echo "Waiting for container to be ready..."
-	@sleep 5
+	@max_wait=60; \
+	elapsed=0; \
+	while [ $$elapsed -lt $$max_wait ]; do \
+		if docker ps --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \
+			echo "✅ Container is running after $$elapsed seconds!"; \
+			break; \
+		fi; \
+		if [ $$elapsed -eq 0 ]; then \
+			echo "Checking container status..."; \
+		else \
+			echo "Still waiting... ($$elapsed seconds elapsed)"; \
+		fi; \
+		sleep 5; \
+		elapsed=$$((elapsed + 5)); \
+	done; \
+	if [ $$elapsed -ge $$max_wait ]; then \
+		echo "❌ Container failed to start within $$max_wait seconds!"; \
+		exit 1; \
+	fi
 	@echo ""
-	@echo "✅ Container is running!"
 	@echo ""
 	@echo "PostgreSQL: localhost:5432 (user: postgres, password: testpass)"
 	@echo "SSH access: ssh -p $(SSH_PORT) postgres@localhost (password: testpass)"
@@ -137,6 +159,7 @@ clean:
 	-docker stop $(CONTAINER_NAME) 2>/dev/null || true
 	-docker rm -f $(CONTAINER_NAME) 2>/dev/null || true
 	-docker image rm -f $(IMAGE_NAME) 2>/dev/null || true
+	-rm -f .build
 	@echo "Cleanup complete."
 
 # Complete cleanup including volumes

@@ -174,22 +174,46 @@ DO $$
 BEGIN
     IF position('test7' in :'test_filter_var') > 0 OR :'test_filter_var' = '' THEN
         RAISE NOTICE 'RUNNING TEST7: Utility Statements';
+    END IF;
+END $$;
+
+-- Set very low threshold to ensure utility statements bypass cost guard
+SET cost_guard.enabled = true;
+SET cost_guard.threshold = 1;
+
+-- Test DDL statements in transaction block
+DO $$
+BEGIN
+    IF position('test7' in :'test_filter_var') > 0 OR :'test_filter_var' = '' THEN
         BEGIN
-            SET cost_guard.enabled = true;
-            SET cost_guard.threshold = 1;
-            
             CREATE TABLE test_utility (id INTEGER);
             DROP TABLE test_utility;
             CREATE INDEX test_idx ON small_table(data);
             DROP INDEX test_idx;
-            VACUUM small_table;
-            ANALYZE small_table;
             
-            RAISE NOTICE 'PASS: All utility statements executed successfully';
+            RAISE NOTICE 'PASS: DDL utility statements executed successfully';
         EXCEPTION
             WHEN OTHERS THEN
-                RAISE NOTICE 'FAIL: Utility statements failed - %', SQLERRM;
+                RAISE NOTICE 'FAIL: DDL utility statements failed - %', SQLERRM;
         END;
+    END IF;
+END $$;
+
+-- Test VACUUM and ANALYZE outside transaction (they cannot run in DO blocks)
+DO $$
+BEGIN
+    IF position('test7' in :'test_filter_var') > 0 OR :'test_filter_var' = '' THEN
+        RAISE NOTICE 'Running VACUUM and ANALYZE...';
+    END IF;
+END $$;
+
+VACUUM small_table;
+ANALYZE small_table;
+
+DO $$
+BEGIN
+    IF position('test7' in :'test_filter_var') > 0 OR :'test_filter_var' = '' THEN
+        RAISE NOTICE 'PASS: VACUUM and ANALYZE executed successfully';
     END IF;
 END $$;
 
@@ -217,7 +241,8 @@ BEGIN
         RAISE NOTICE 'RUNNING TEST9: Warning System';
         BEGIN
             SET cost_guard.threshold = 100000;
-            PERFORM COUNT(*) FROM medium_table ORDER BY value;
+            -- Query that should trigger warning (cost approaching threshold)
+            PERFORM * FROM medium_table m1, medium_table m2 WHERE m1.id < 100 AND m2.id < 100;
             RAISE NOTICE 'PASS: Warning system test completed (check logs for warnings)';
         EXCEPTION
             WHEN OTHERS THEN

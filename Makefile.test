@@ -97,13 +97,6 @@ stop:
 # Restart the container
 restart: stop start
 
-# Complete test workflow: start container, run tests, show results
-test: start
-	@echo ""
-	@echo "Running complete test workflow..."
-	@sleep 2
-	@$(MAKE) run-tests
-
 # View container logs
 logs:
 	@if ! docker ps -a --format '{{.Names}}' | grep -q "^$(CONTAINER_NAME)$$"; then \

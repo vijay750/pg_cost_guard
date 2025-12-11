@@ -40,7 +40,7 @@ The Cost Guard Extension is a PostgreSQL extension that intercepts query plannin
 
 ```bash
 # Run complete test suite in isolated environment
-make -f Makefile.test test
+make -f Makefile.test run-tests
 
 # Interactive debugging
 make -f Makefile.test debug
